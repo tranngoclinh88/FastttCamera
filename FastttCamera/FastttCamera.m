@@ -16,17 +16,24 @@
 #import "FastttZoom.h"
 #import "FastttCapturedImage+Process.h"
 
-@interface FastttCamera () <FastttFocusDelegate, FastttZoomDelegate>
+#define CAPTURE_STILL_IMAGE 0
+
+@interface FastttCamera () <FastttFocusDelegate, FastttZoomDelegate, AVCaptureVideoDataOutputSampleBufferDelegate>
 
 @property (nonatomic, strong) IFTTTDeviceOrientation *deviceOrientation;
 @property (nonatomic, strong) FastttFocus *fastFocus;
 @property (nonatomic, strong) FastttZoom *fastZoom;
 @property (nonatomic, strong) AVCaptureSession *session;
 @property (nonatomic, strong) AVCaptureVideoPreviewLayer *previewLayer;
+#if CAPTURE_STILL_IMAGE
 @property (nonatomic, strong) AVCaptureStillImageOutput *stillImageOutput;
+#else
+@property (nonatomic, strong) AVCaptureVideoDataOutput *videoDataOutput;
+@property dispatch_queue_t captureSessionQueue;
+@property (nonatomic, assign) BOOL isShooting;
+#endif
 @property (nonatomic, assign) BOOL deviceAuthorized;
 @property (nonatomic, assign) BOOL isCapturingImage;
-
 @end
 
 @implementation FastttCamera
@@ -411,7 +418,7 @@
             dispatch_async(dispatch_get_main_queue(), ^{
                 
                 _session = [AVCaptureSession new];
-                _session.sessionPreset = AVCaptureSessionPresetPhoto;
+                _session.sessionPreset = AVCaptureSessionPresetHigh;
                 
                 AVCaptureDevice *device = [AVCaptureDevice cameraDevice:self.cameraDevice];
                 
@@ -449,12 +456,27 @@
                 [self setCameraFlashMode:_cameraFlashMode];
 #endif
                 
+#if CAPTURE_STILL_IMAGE
                 NSDictionary *outputSettings = @{AVVideoCodecKey:AVVideoCodecJPEG};
                 
                 _stillImageOutput = [AVCaptureStillImageOutput new];
                 _stillImageOutput.outputSettings = outputSettings;
                 
                 [_session addOutput:_stillImageOutput];
+#else
+                
+                // CoreImage wants BGRA pixel format
+                NSDictionary *videoOutputSettings = @{ (id)kCVPixelBufferPixelFormatTypeKey : [NSNumber numberWithInteger:kCVPixelFormatType_32BGRA]};
+                // create and configure video data output
+                _videoDataOutput = [[AVCaptureVideoDataOutput alloc] init];
+                _videoDataOutput.videoSettings = videoOutputSettings;
+                _videoDataOutput.alwaysDiscardsLateVideoFrames = YES;
+                
+                // create the dispatch queue for handling capture session delegate method calls
+                _captureSessionQueue = dispatch_queue_create("capture_session_queue", NULL);
+                [_videoDataOutput setSampleBufferDelegate:self queue:_captureSessionQueue];
+                [_session addOutput:_videoDataOutput];
+#endif
                 
                 _deviceOrientation = [IFTTTDeviceOrientation new];
                 
@@ -487,8 +509,13 @@
         [_session removeInput:input];
     }
     
+#if CAPTURE_STILL_IMAGE
     [_session removeOutput:_stillImageOutput];
     _stillImageOutput = nil;
+#else
+    [_session removeOutput:_videoDataOutput];
+    _videoDataOutput = nil;
+#endif
     
     [self _removePreviewLayer];
     
@@ -503,6 +530,8 @@
         return;
     }
     self.isCapturingImage = YES;
+    
+#if CAPTURE_STILL_IMAGE
     
     BOOL needsPreviewRotation = ![self.deviceOrientation deviceOrientationMatchesInterfaceOrientation];
     
@@ -550,7 +579,161 @@
          });
      }];
 #endif
+    
+#else
+    if (self.isShooting) {
+        return;
+    }
+    self.isShooting = YES;
+#endif
+    
 }
+
+#if !CAPTURE_STILL_IMAGE
+
+- (void)captureOutput:(AVCaptureOutput *)captureOutput didOutputSampleBuffer:(CMSampleBufferRef)sampleBuffer fromConnection:(AVCaptureConnection *)connection {
+    if (!self.isShooting) {
+        return;
+    }
+    self.isShooting = NO;
+    
+    BOOL needsPreviewRotation = ![self.deviceOrientation deviceOrientationMatchesInterfaceOrientation];
+    
+    AVCaptureConnection *videoConnection = [self _currentCaptureConnection];
+    
+    if ([videoConnection isVideoOrientationSupported]) {
+        [videoConnection setVideoOrientation:[self _currentCaptureVideoOrientationForDevice]];
+    }
+    
+    if ([videoConnection isVideoMirroringSupported]) {
+        [videoConnection setVideoMirrored:(_cameraDevice == FastttCameraDeviceFront)];
+    }
+    
+#if TARGET_IPHONE_SIMULATOR
+    [self _insertPreviewLayer];
+    dispatch_async(dispatch_get_global_queue(DISPATCH_QUEUE_PRIORITY_DEFAULT, 0), ^{
+        UIImage *fakeImage = [UIImage fastttFakeTestImage];
+        [self _processCameraPhoto:fakeImage needsPreviewRotation:needsPreviewRotation previewOrientation:UIDeviceOrientationPortrait];
+    });
+#else
+    UIDeviceOrientation previewOrientation = [self _currentPreviewDeviceOrientation];
+    
+    if (!sampleBuffer) {
+        return;
+    }
+    
+    if (!self.isCapturingImage) {
+        return;
+    }
+
+//    UIImage *image = [self imageFromSampleBuffer:sampleBuffer];
+//    UIImage *croppedImage = [self cropCameraImage:image toPreviewLayerBounds:self.previewLayer];
+    
+    CVPixelBufferRef pixelBuffer = (CVPixelBufferRef)CMSampleBufferGetImageBuffer(sampleBuffer);
+    __block CIImage *image = [CIImage imageWithCVPixelBuffer:pixelBuffer];
+    
+    CGRect outputRect = [self.previewLayer metadataOutputRectOfInterestForRect:self.previewLayer.bounds];
+    outputRect.origin.y = outputRect.origin.x;
+    outputRect.origin.x = 0;
+    outputRect.size.height = outputRect.size.width;
+    outputRect.size.width = 1;
+    
+    UIImage *takenImage = [[UIImage alloc] initWithCIImage:image];
+    CGImageRef takenCGImage = [[CIContext contextWithOptions:nil] createCGImage:image fromRect:[image extent]];
+    size_t width = CGImageGetWidth(takenCGImage);
+    size_t height = CGImageGetHeight(takenCGImage);
+    CGRect cropRect = CGRectMake(outputRect.origin.x * width, outputRect.origin.y * height, outputRect.size.width * width, outputRect.size.height * height);
+    CGImageRef cropCGImage = CGImageCreateWithImageInRect(takenCGImage, cropRect);
+    UIImage *its = [UIImage imageWithCGImage:cropCGImage scale:1 orientation:takenImage.imageOrientation];
+
+    dispatch_async(dispatch_get_global_queue(DISPATCH_QUEUE_PRIORITY_DEFAULT, 0), ^{
+        [self _processCameraPhoto:its needsPreviewRotation:needsPreviewRotation previewOrientation:previewOrientation];
+    });
+#endif
+}
+
+// Create a UIImage from sample buffer data
+- (UIImage *) imageFromSampleBuffer:(CMSampleBufferRef) sampleBuffer  {
+    // Get a CMSampleBuffer's Core Video image buffer for the media data
+    CVImageBufferRef imageBuffer = CMSampleBufferGetImageBuffer(sampleBuffer);
+    // Lock the base address of the pixel buffer
+    CVPixelBufferLockBaseAddress(imageBuffer, 0);
+    
+    // Get the number of bytes per row for the pixel buffer
+    void *baseAddress = CVPixelBufferGetBaseAddress(imageBuffer);
+    
+    // Get the number of bytes per row for the pixel buffer
+    size_t bytesPerRow = CVPixelBufferGetBytesPerRow(imageBuffer);
+    // Get the pixel buffer width and height
+    size_t width = CVPixelBufferGetWidth(imageBuffer);
+    size_t height = CVPixelBufferGetHeight(imageBuffer);
+    
+    // Create a device-dependent RGB color space
+    CGColorSpaceRef colorSpace = CGColorSpaceCreateDeviceRGB();
+    
+    // Create a bitmap graphics context with the sample buffer data
+    CGContextRef context1 = CGBitmapContextCreate(baseAddress, width, height, 8,
+                                                  bytesPerRow, colorSpace, kCGBitmapByteOrder32Little | kCGImageAlphaPremultipliedFirst);
+    
+    // Create a Quartz image from the pixel data in the bitmap graphics context
+    CGImageRef quartzImage = CGBitmapContextCreateImage(context1);
+    // Unlock the pixel buffer
+    CVPixelBufferUnlockBaseAddress(imageBuffer,0);
+    
+    // Free up the context and color space
+    CGContextRelease(context1);
+    CGColorSpaceRelease(colorSpace);
+    
+    // Create an image object from the Quartz image
+    //I modified this line: [UIImage imageWithCGImage:quartzImage]; to the following to correct the orientation:
+    UIImage *image =  [UIImage imageWithCGImage:quartzImage scale:1.0 orientation:UIImageOrientationRight];
+    
+    // Release the Quartz image
+    CGImageRelease(quartzImage);
+    
+    return (image);
+}
+
+-(UIImage*) cropCameraImage:(UIImage*) original toPreviewLayerBounds:(AVCaptureVideoPreviewLayer*) previewLayer {
+    UIImage *ret = nil;
+    
+    CGRect previewImageLayerBounds = previewLayer.bounds;
+    
+    // This calculates the crop area.
+    // keeping in mind that this works with on an unrotated image (so a portrait image is actually rotated counterclockwise)
+    // thats why we use originalHeight to calculate the width
+    float originalWidth  = original.size.width;
+    float originalHeight = original.size.height;
+    
+    CGPoint A = previewImageLayerBounds.origin;
+    CGPoint B = CGPointMake(previewImageLayerBounds.size.width, previewImageLayerBounds.origin.y);
+    //    CGPoint C = CGPointMake(self.imageViewTop.bounds.origin.x, self.imageViewTop.bounds.size.height);
+    CGPoint D = CGPointMake(previewImageLayerBounds.size.width, previewImageLayerBounds.size.height);
+    
+    CGPoint a = [previewLayer captureDevicePointOfInterestForPoint:A];
+    CGPoint b = [previewLayer captureDevicePointOfInterestForPoint:B];
+    //    CGPoint c = [previewLayer captureDevicePointOfInterestForPoint:C];
+    CGPoint d =[previewLayer captureDevicePointOfInterestForPoint:D];
+    
+    float posX = floor(b.x * originalHeight);
+    float posY = floor(b.y * originalWidth);
+    
+    CGFloat width = d.x * originalHeight - b.x * originalHeight;
+    CGFloat height = a.y * originalWidth - b.y * originalWidth;
+    CGRect cropRectangle = CGRectMake(posX, posY, width, height);
+    
+    // This performs the image cropping.
+    CGImageRef imageRef = CGImageCreateWithImageInRect([original CGImage], cropRectangle);
+    
+    ret = [UIImage imageWithCGImage:imageRef
+                              scale:original.scale
+                        orientation:original.imageOrientation];
+    
+    CGImageRelease(imageRef);
+    
+    return ret;
+}
+#endif
 
 #pragma mark - Processing a Photo
 
@@ -716,7 +899,11 @@
 {
     AVCaptureConnection *videoConnection = nil;
     
+#if CAPTURE_STILL_IMAGE
     for (AVCaptureConnection *connection in [_stillImageOutput connections]) {
+#else
+    for (AVCaptureConnection *connection in [_videoDataOutput connections]) {
+#endif
         for (AVCaptureInputPort *port in [connection inputPorts]) {
             if ([[port mediaType] isEqual:AVMediaTypeVideo]) {
                 videoConnection = connection;
