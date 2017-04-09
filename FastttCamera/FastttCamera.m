@@ -55,7 +55,8 @@
             scalesImage = _scalesImage,
             cameraDevice = _cameraDevice,
             cameraFlashMode = _cameraFlashMode,
-            cameraTorchMode = _cameraTorchMode;
+            cameraTorchMode = _cameraTorchMode,
+            mirrorsOutput = _mirrorsOutput;
 
 - (instancetype)init
 {
@@ -151,6 +152,7 @@
     [self _insertPreviewLayer];
     
     [self _setPreviewVideoOrientation];
+    [self _setPreviewVideoMirroring];
 }
 
 - (void)viewDidDisappear:(BOOL)animated
@@ -461,6 +463,7 @@
                 
                 _stillImageOutput = [AVCaptureStillImageOutput new];
                 _stillImageOutput.outputSettings = outputSettings;
+                _stillImageOutput.highResolutionStillImageOutputEnabled = YES;
                 
                 [_session addOutput:_stillImageOutput];
 #else
@@ -536,13 +539,15 @@
     BOOL needsPreviewRotation = ![self.deviceOrientation deviceOrientationMatchesInterfaceOrientation];
     
     AVCaptureConnection *videoConnection = [self _currentCaptureConnection];
+    if (!videoConnection.isActive)
+        return;
     
     if ([videoConnection isVideoOrientationSupported]) {
         [videoConnection setVideoOrientation:[self _currentCaptureVideoOrientationForDevice]];
     }
     
     if ([videoConnection isVideoMirroringSupported]) {
-        [videoConnection setVideoMirrored:(_cameraDevice == FastttCameraDeviceFront)];
+        [videoConnection setVideoMirrored:self.mirrorsOutput];
     }
     
 #if TARGET_IPHONE_SIMULATOR
@@ -826,6 +831,14 @@
     }
 }
 
+- (void)_setPreviewVideoMirroring {
+    AVCaptureConnection *videoConnection = [_previewLayer connection];
+    videoConnection.automaticallyAdjustsVideoMirroring = NO;
+    if ([videoConnection isVideoMirroringSupported]) {
+        [videoConnection setVideoMirrored:self.mirrorsOutput];
+    }
+}
+
 - (AVCaptureVideoOrientation)_currentCaptureVideoOrientationForDevice
 {
     UIDeviceOrientation actualOrientation = self.deviceOrientation.orientation;
@@ -870,11 +883,34 @@
         case UIDeviceOrientationLandscapeRight:
             return AVCaptureVideoOrientationLandscapeLeft;
             
+        case UIDeviceOrientationFaceUp:
+        case UIDeviceOrientationFaceDown:
+            return [self.class _videoOrientationFromStatusBarOrientation];
+            
         default:
             break;
     }
     
     return AVCaptureVideoOrientationPortrait;
+}
+
++ (AVCaptureVideoOrientation)_videoOrientationFromStatusBarOrientation {
+    switch ([UIApplication sharedApplication].statusBarOrientation) {
+        case UIInterfaceOrientationLandscapeLeft:
+            return AVCaptureVideoOrientationLandscapeLeft;
+
+        case UIInterfaceOrientationLandscapeRight:
+            return AVCaptureVideoOrientationLandscapeRight;
+            
+        case UIInterfaceOrientationPortrait:
+            return AVCaptureVideoOrientationPortrait;
+
+        case UIInterfaceOrientationPortraitUpsideDown:
+            return AVCaptureVideoOrientationPortraitUpsideDown;
+            
+        default:
+            return AVCaptureVideoOrientationPortrait;
+    }
 }
 
 #pragma mark - Camera Permissions
