@@ -657,6 +657,7 @@
 #endif
 }
 
+/*
 // Create a UIImage from sample buffer data
 - (UIImage *) imageFromSampleBuffer:(CMSampleBufferRef) sampleBuffer  {
     // Get a CMSampleBuffer's Core Video image buffer for the media data
@@ -737,7 +738,7 @@
     CGImageRelease(imageRef);
     
     return ret;
-}
+} */
 #endif
 
 #pragma mark - Processing a Photo
