@@ -498,6 +498,23 @@ mirrorsOutput = _mirrorsOutput;
                     [self _insertPreviewLayer];
                     [self _setPreviewVideoOrientation];
                     [self _resetZoom];
+                    
+                    AVCaptureConnection *videoConnection = [self _currentCaptureConnection];
+                    if (!videoConnection.isActive)
+                        return;
+                    
+                    if ([videoConnection isVideoOrientationSupported]) {
+                        [videoConnection setVideoOrientation:[self _currentCaptureVideoOrientationForDevice]];
+                    }
+                    
+                    if ([videoConnection isVideoMirroringSupported]) {
+                        [videoConnection setVideoMirrored:self.mirrorsOutput];
+                    }
+                    
+                    if ([device lockForConfiguration:nil]) {
+                        [device setFocusPointOfInterest:CGPointMake(0.5f,0.5f)];
+                        [device unlockForConfiguration];
+                    }
                 }
             });
         }
@@ -544,10 +561,6 @@ mirrorsOutput = _mirrorsOutput;
     }
     self.isCapturingImage = YES;
     
-#if CAPTURE_STILL_IMAGE // Using still image output
-    
-    BOOL needsPreviewRotation = ![self.deviceOrientation deviceOrientationMatchesInterfaceOrientation];
-    
     AVCaptureConnection *videoConnection = [self _currentCaptureConnection];
     if (!videoConnection.isActive)
         return;
@@ -559,6 +572,10 @@ mirrorsOutput = _mirrorsOutput;
     if ([videoConnection isVideoMirroringSupported]) {
         [videoConnection setVideoMirrored:self.mirrorsOutput];
     }
+
+#if CAPTURE_STILL_IMAGE // Using still image output
+    
+    BOOL needsPreviewRotation = ![self.deviceOrientation deviceOrientationMatchesInterfaceOrientation];
     
 #if TARGET_IPHONE_SIMULATOR
     [self _insertPreviewLayer];
@@ -606,28 +623,10 @@ mirrorsOutput = _mirrorsOutput;
 
 #else // Using video output
 
-AVCaptureConnection *videoConnection = [self _currentCaptureConnection];
-
-if (!videoConnection.isActive)
-return;
-
-if ([videoConnection isVideoOrientationSupported]) {
-    AVCaptureVideoOrientation videoOrientation = [self _currentCaptureVideoOrientationForDevice];
-    if (videoConnection.videoOrientation != videoOrientation) {
-        [videoConnection setVideoOrientation:videoOrientation];
+    if (self.shootingCount > 0) {
+        return;
     }
-}
-
-if ([videoConnection isVideoMirroringSupported]) {
-    if (videoConnection.videoMirrored != (_cameraDevice == FastttCameraDeviceFront)) {
-        [videoConnection setVideoMirrored:(_cameraDevice == FastttCameraDeviceFront)];
-    }
-}
-
-if (self.shootingCount > 0) {
-    return;
-}
-self.shootingCount = 1;
+    self.shootingCount = 1;
 }
 
 - (void)captureOutput:(AVCaptureOutput *)captureOutput didOutputSampleBuffer:(CMSampleBufferRef)sampleBuffer fromConnection:(AVCaptureConnection *)connection {
@@ -691,87 +690,87 @@ self.shootingCount = 1;
 #endif
 }
 
-// Create a UIImage from sample buffer data
-- (UIImage *) imageFromSampleBuffer:(CMSampleBufferRef) sampleBuffer  {
-    // Get a CMSampleBuffer's Core Video image buffer for the media data
-    CVImageBufferRef imageBuffer = CMSampleBufferGetImageBuffer(sampleBuffer);
-    // Lock the base address of the pixel buffer
-    CVPixelBufferLockBaseAddress(imageBuffer, 0);
-    
-    // Get the number of bytes per row for the pixel buffer
-    void *baseAddress = CVPixelBufferGetBaseAddress(imageBuffer);
-    
-    // Get the number of bytes per row for the pixel buffer
-    size_t bytesPerRow = CVPixelBufferGetBytesPerRow(imageBuffer);
-    // Get the pixel buffer width and height
-    size_t width = CVPixelBufferGetWidth(imageBuffer);
-    size_t height = CVPixelBufferGetHeight(imageBuffer);
-    
-    // Create a device-dependent RGB color space
-    CGColorSpaceRef colorSpace = CGColorSpaceCreateDeviceRGB();
-    
-    // Create a bitmap graphics context with the sample buffer data
-    CGContextRef context1 = CGBitmapContextCreate(baseAddress, width, height, 8,
-                                                  bytesPerRow, colorSpace, kCGBitmapByteOrder32Little | kCGImageAlphaPremultipliedFirst);
-    
-    // Create a Quartz image from the pixel data in the bitmap graphics context
-    CGImageRef quartzImage = CGBitmapContextCreateImage(context1);
-    // Unlock the pixel buffer
-    CVPixelBufferUnlockBaseAddress(imageBuffer,0);
-    
-    // Free up the context and color space
-    CGContextRelease(context1);
-    CGColorSpaceRelease(colorSpace);
-    
-    // Create an image object from the Quartz image
-    //I modified this line: [UIImage imageWithCGImage:quartzImage]; to the following to correct the orientation:
-    UIImage *image =  [UIImage imageWithCGImage:quartzImage scale:1.0 orientation:UIImageOrientationRight];
-    
-    // Release the Quartz image
-    CGImageRelease(quartzImage);
-    
-    return (image);
-}
-
--(UIImage*) cropCameraImage:(UIImage*) original toPreviewLayerBounds:(AVCaptureVideoPreviewLayer*) previewLayer {
-    UIImage *ret = nil;
-    
-    CGRect previewImageLayerBounds = previewLayer.bounds;
-    
-    // This calculates the crop area.
-    // keeping in mind that this works with on an unrotated image (so a portrait image is actually rotated counterclockwise)
-    // thats why we use originalHeight to calculate the width
-    float originalWidth  = original.size.width;
-    float originalHeight = original.size.height;
-    
-    CGPoint A = previewImageLayerBounds.origin;
-    CGPoint B = CGPointMake(previewImageLayerBounds.size.width, previewImageLayerBounds.origin.y);
-    //    CGPoint C = CGPointMake(self.imageViewTop.bounds.origin.x, self.imageViewTop.bounds.size.height);
-    CGPoint D = CGPointMake(previewImageLayerBounds.size.width, previewImageLayerBounds.size.height);
-    
-    CGPoint a = [previewLayer captureDevicePointOfInterestForPoint:A];
-    CGPoint b = [previewLayer captureDevicePointOfInterestForPoint:B];
-    //    CGPoint c = [previewLayer captureDevicePointOfInterestForPoint:C];
-    CGPoint d =[previewLayer captureDevicePointOfInterestForPoint:D];
-    
-    float posX = floor(b.x * originalHeight);
-    float posY = floor(b.y * originalWidth);
-    
-    CGFloat width = d.x * originalHeight - b.x * originalHeight;
-    CGFloat height = a.y * originalWidth - b.y * originalWidth;
-    CGRect cropRectangle = CGRectMake(posX, posY, width, height);
-    
-    // This performs the image cropping.
-    CGImageRef imageRef = CGImageCreateWithImageInRect([original CGImage], cropRectangle);
-    
-    ret = [UIImage imageWithCGImage:imageRef
-                              scale:original.scale
-                        orientation:original.imageOrientation];
-    
-    CGImageRelease(imageRef);
-    
-    return ret;
-}
+//// Create a UIImage from sample buffer data
+//- (UIImage *) imageFromSampleBuffer:(CMSampleBufferRef) sampleBuffer  {
+//    // Get a CMSampleBuffer's Core Video image buffer for the media data
+//    CVImageBufferRef imageBuffer = CMSampleBufferGetImageBuffer(sampleBuffer);
+//    // Lock the base address of the pixel buffer
+//    CVPixelBufferLockBaseAddress(imageBuffer, 0);
+//    
+//    // Get the number of bytes per row for the pixel buffer
+//    void *baseAddress = CVPixelBufferGetBaseAddress(imageBuffer);
+//    
+//    // Get the number of bytes per row for the pixel buffer
+//    size_t bytesPerRow = CVPixelBufferGetBytesPerRow(imageBuffer);
+//    // Get the pixel buffer width and height
+//    size_t width = CVPixelBufferGetWidth(imageBuffer);
+//    size_t height = CVPixelBufferGetHeight(imageBuffer);
+//    
+//    // Create a device-dependent RGB color space
+//    CGColorSpaceRef colorSpace = CGColorSpaceCreateDeviceRGB();
+//    
+//    // Create a bitmap graphics context with the sample buffer data
+//    CGContextRef context1 = CGBitmapContextCreate(baseAddress, width, height, 8,
+//                                                  bytesPerRow, colorSpace, kCGBitmapByteOrder32Little | kCGImageAlphaPremultipliedFirst);
+//    
+//    // Create a Quartz image from the pixel data in the bitmap graphics context
+//    CGImageRef quartzImage = CGBitmapContextCreateImage(context1);
+//    // Unlock the pixel buffer
+//    CVPixelBufferUnlockBaseAddress(imageBuffer,0);
+//    
+//    // Free up the context and color space
+//    CGContextRelease(context1);
+//    CGColorSpaceRelease(colorSpace);
+//    
+//    // Create an image object from the Quartz image
+//    //I modified this line: [UIImage imageWithCGImage:quartzImage]; to the following to correct the orientation:
+//    UIImage *image =  [UIImage imageWithCGImage:quartzImage scale:1.0 orientation:UIImageOrientationRight];
+//    
+//    // Release the Quartz image
+//    CGImageRelease(quartzImage);
+//    
+//    return (image);
+//}
+//
+//-(UIImage*) cropCameraImage:(UIImage*) original toPreviewLayerBounds:(AVCaptureVideoPreviewLayer*) previewLayer {
+//    UIImage *ret = nil;
+//    
+//    CGRect previewImageLayerBounds = previewLayer.bounds;
+//    
+//    // This calculates the crop area.
+//    // keeping in mind that this works with on an unrotated image (so a portrait image is actually rotated counterclockwise)
+//    // thats why we use originalHeight to calculate the width
+//    float originalWidth  = original.size.width;
+//    float originalHeight = original.size.height;
+//    
+//    CGPoint A = previewImageLayerBounds.origin;
+//    CGPoint B = CGPointMake(previewImageLayerBounds.size.width, previewImageLayerBounds.origin.y);
+//    //    CGPoint C = CGPointMake(self.imageViewTop.bounds.origin.x, self.imageViewTop.bounds.size.height);
+//    CGPoint D = CGPointMake(previewImageLayerBounds.size.width, previewImageLayerBounds.size.height);
+//    
+//    CGPoint a = [previewLayer captureDevicePointOfInterestForPoint:A];
+//    CGPoint b = [previewLayer captureDevicePointOfInterestForPoint:B];
+//    //    CGPoint c = [previewLayer captureDevicePointOfInterestForPoint:C];
+//    CGPoint d =[previewLayer captureDevicePointOfInterestForPoint:D];
+//    
+//    float posX = floor(b.x * originalHeight);
+//    float posY = floor(b.y * originalWidth);
+//    
+//    CGFloat width = d.x * originalHeight - b.x * originalHeight;
+//    CGFloat height = a.y * originalWidth - b.y * originalWidth;
+//    CGRect cropRectangle = CGRectMake(posX, posY, width, height);
+//    
+//    // This performs the image cropping.
+//    CGImageRef imageRef = CGImageCreateWithImageInRect([original CGImage], cropRectangle);
+//    
+//    ret = [UIImage imageWithCGImage:imageRef
+//                              scale:original.scale
+//                        orientation:original.imageOrientation];
+//    
+//    CGImageRelease(imageRef);
+//    
+//    return ret;
+//}
 #endif // Endif not still image.
 
 #pragma mark - Processing a Photo
