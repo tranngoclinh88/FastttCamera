@@ -16,7 +16,7 @@
 #import "FastttZoom.h"
 #import "FastttCapturedImage+Process.h"
 
-#define CAPTURE_STILL_IMAGE 0
+#define CAPTURE_STILL_IMAGE 1
 
 @interface FastttCamera () <FastttFocusDelegate, FastttZoomDelegate, AVCaptureVideoDataOutputSampleBufferDelegate>
 
@@ -559,6 +559,14 @@
 #else    
     UIDeviceOrientation previewOrientation = [self _currentPreviewDeviceOrientation];
 
+    static SystemSoundID soundID = 0;
+    if (soundID == 0) {
+        NSString *path = [[NSBundle mainBundle] pathForResource:@"photoShutter2" ofType:@"caf"];
+        NSURL *filePath = [NSURL fileURLWithPath:path isDirectory:NO];
+        AudioServicesCreateSystemSoundID((__bridge CFURLRef)filePath, &soundID);
+    }
+    AudioServicesPlaySystemSound(soundID);
+    
     [_stillImageOutput captureStillImageAsynchronouslyFromConnection:videoConnection
                                                    completionHandler:^(CMSampleBufferRef imageDataSampleBuffer, NSError *error)
      {
