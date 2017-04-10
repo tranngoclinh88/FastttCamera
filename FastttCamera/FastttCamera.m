@@ -16,7 +16,7 @@
 #import "FastttZoom.h"
 #import "FastttCapturedImage+Process.h"
 
-#define isiPhone5  ([[UIScreen mainScreen] bounds].size.height == 568)
+#import "UIDeviceHardware.h"
 
 #define CAPTURE_STILL_IMAGE 0
 
@@ -40,24 +40,24 @@
 @implementation FastttCamera
 
 @synthesize delegate = _delegate,
-            returnsRotatedPreview = _returnsRotatedPreview,
-            showsFocusView = _showsFocusView,
-            maxScaledDimension = _maxScaledDimension,
-            normalizesImageOrientations = _normalizesImageOrientations,
-            cropsImageToVisibleAspectRatio = _cropsImageToVisibleAspectRatio,
-            interfaceRotatesWithOrientation = _interfaceRotatesWithOrientation,
-            fixedInterfaceOrientation = _fixedInterfaceOrientation,
-            handlesTapFocus = _handlesTapFocus,
-            handlesZoom = _handlesZoom,
-            maxZoomFactor = _maxZoomFactor,
-            showsZoomView = _showsZoomView,
-            gestureView = _gestureView,
-            gestureDelegate = _gestureDelegate,
-            scalesImage = _scalesImage,
-            cameraDevice = _cameraDevice,
-            cameraFlashMode = _cameraFlashMode,
-            cameraTorchMode = _cameraTorchMode,
-            mirrorsOutput = _mirrorsOutput;
+returnsRotatedPreview = _returnsRotatedPreview,
+showsFocusView = _showsFocusView,
+maxScaledDimension = _maxScaledDimension,
+normalizesImageOrientations = _normalizesImageOrientations,
+cropsImageToVisibleAspectRatio = _cropsImageToVisibleAspectRatio,
+interfaceRotatesWithOrientation = _interfaceRotatesWithOrientation,
+fixedInterfaceOrientation = _fixedInterfaceOrientation,
+handlesTapFocus = _handlesTapFocus,
+handlesZoom = _handlesZoom,
+maxZoomFactor = _maxZoomFactor,
+showsZoomView = _showsZoomView,
+gestureView = _gestureView,
+gestureDelegate = _gestureDelegate,
+scalesImage = _scalesImage,
+cameraDevice = _cameraDevice,
+cameraFlashMode = _cameraFlashMode,
+cameraTorchMode = _cameraTorchMode,
+mirrorsOutput = _mirrorsOutput;
 
 - (instancetype)init
 {
@@ -149,7 +149,7 @@
     [super viewWillAppear:animated];
     
     [self startRunning];
-
+    
     [self _insertPreviewLayer];
     
     [self _setPreviewVideoOrientation];
@@ -160,9 +160,7 @@
 {
     [super viewDidDisappear:animated];
     
-    dispatch_async(dispatch_get_main_queue(), ^{
-       [self stopRunning];
-    });
+    [self stopRunning];
 }
 
 - (void)viewDidLayoutSubviews
@@ -358,18 +356,14 @@
 - (void)startRunning
 {
     if (![_session isRunning]) {
-        dispatch_async(dispatch_get_main_queue(), ^{
-            [_session startRunning];
-        });
+        [_session startRunning];
     }
 }
 
 - (void)stopRunning
 {
     if ([_session isRunning]) {
-        dispatch_async(dispatch_get_main_queue(), ^{
-            [_session stopRunning];
-        });
+        [_session stopRunning];
     }
 }
 
@@ -475,7 +469,8 @@
                 [_session addOutput:_stillImageOutput];
 #else
                 
-                if (isiPhone5) {
+                if ([[UIDeviceHardware platformString] containsString:@"iPhone 5"]
+                    || [[UIDeviceHardware platformString] containsString:@"iPhone 4"]) {
                     if ([device lockForConfiguration:nil]) {
                         device.activeVideoMinFrameDuration = CMTimeMake(1, 15);
                         [device unlockForConfiguration];
@@ -492,7 +487,7 @@
                 dispatch_queue_t _captureSessionQueue = dispatch_queue_create("capture_session_queue", NULL);
                 [_videoDataOutput setSampleBufferDelegate:self queue:_captureSessionQueue];
                 _videoDataOutput.alwaysDiscardsLateVideoFrames = YES;
-
+                
                 [_session addOutput:_videoDataOutput];
 #endif
                 
@@ -571,9 +566,9 @@
         UIImage *fakeImage = [UIImage fastttFakeTestImage];
         [self _processCameraPhoto:fakeImage needsPreviewRotation:needsPreviewRotation previewOrientation:UIDeviceOrientationPortrait];
     });
-#else    
+#else
     UIDeviceOrientation previewOrientation = [self _currentPreviewDeviceOrientation];
-
+    
     static SystemSoundID soundID = 0;
     if (soundID == 0) {
         NSString *path = [[NSBundle mainBundle] pathForResource:@"photoShutter2" ofType:@"caf"];
@@ -594,11 +589,11 @@
          }
          
          NSData *imageData = [AVCaptureStillImageOutput jpegStillImageNSDataRepresentation:imageDataSampleBuffer];
-
+         
          if ([self.delegate respondsToSelector:@selector(cameraController:didFinishCapturingImageData:)]) {
              [self.delegate cameraController:self didFinishCapturingImageData:imageData];
          }
-
+         
          dispatch_async(dispatch_get_global_queue(DISPATCH_QUEUE_PRIORITY_DEFAULT, 0), ^{
              
              UIImage *image = [UIImage imageWithData:imageData];
@@ -610,29 +605,29 @@
 }
 
 #else // Using video output
-    
-    AVCaptureConnection *videoConnection = [self _currentCaptureConnection];
-    
-    if (!videoConnection.isActive)
+
+AVCaptureConnection *videoConnection = [self _currentCaptureConnection];
+
+if (!videoConnection.isActive)
+return;
+
+if ([videoConnection isVideoOrientationSupported]) {
+    AVCaptureVideoOrientation videoOrientation = [self _currentCaptureVideoOrientationForDevice];
+    if (videoConnection.videoOrientation != videoOrientation) {
+        [videoConnection setVideoOrientation:videoOrientation];
+    }
+}
+
+if ([videoConnection isVideoMirroringSupported]) {
+    if (videoConnection.videoMirrored != (_cameraDevice == FastttCameraDeviceFront)) {
+        [videoConnection setVideoMirrored:(_cameraDevice == FastttCameraDeviceFront)];
+    }
+}
+
+if (self.shootingCount > 0) {
     return;
-    
-    if ([videoConnection isVideoOrientationSupported]) {
-        AVCaptureVideoOrientation videoOrientation = [self _currentCaptureVideoOrientationForDevice];
-        if (videoConnection.videoOrientation != videoOrientation) {
-            [videoConnection setVideoOrientation:videoOrientation];
-        }
-    }
-    
-    if ([videoConnection isVideoMirroringSupported]) {
-        if (videoConnection.videoMirrored != (_cameraDevice == FastttCameraDeviceFront)) {
-            [videoConnection setVideoMirrored:(_cameraDevice == FastttCameraDeviceFront)];
-        }
-    }
-    
-    if (self.shootingCount > 0) {
-        return;
-    }
-    self.shootingCount = 1;
+}
+self.shootingCount = 1;
 }
 
 - (void)captureOutput:(AVCaptureOutput *)captureOutput didOutputSampleBuffer:(CMSampleBufferRef)sampleBuffer fromConnection:(AVCaptureConnection *)connection {
@@ -666,13 +661,13 @@
     if (!self.isCapturingImage) {
         return;
     }
-
-//    UIImage *image = [self imageFromSampleBuffer:sampleBuffer];
-//    UIImage *croppedImage = [self cropCameraImage:image toPreviewLayerBounds:self.previewLayer];
-//    dispatch_async(dispatch_get_global_queue(DISPATCH_QUEUE_PRIORITY_DEFAULT, 0), ^{
-//        [self _processCameraPhoto:croppedImage needsPreviewRotation:needsPreviewRotation previewOrientation:previewOrientation];
-//    });
-
+    
+    //    UIImage *image = [self imageFromSampleBuffer:sampleBuffer];
+    //    UIImage *croppedImage = [self cropCameraImage:image toPreviewLayerBounds:self.previewLayer];
+    //    dispatch_async(dispatch_get_global_queue(DISPATCH_QUEUE_PRIORITY_DEFAULT, 0), ^{
+    //        [self _processCameraPhoto:croppedImage needsPreviewRotation:needsPreviewRotation previewOrientation:previewOrientation];
+    //    });
+    
     CVPixelBufferRef pixelBuffer = (CVPixelBufferRef)CMSampleBufferGetImageBuffer(sampleBuffer);
     __block CIImage *image = [CIImage imageWithCVPixelBuffer:pixelBuffer];
     
@@ -689,7 +684,7 @@
     CGRect cropRect = CGRectMake(outputRect.origin.x * width, outputRect.origin.y * height, outputRect.size.width * width, outputRect.size.height * height);
     CGImageRef cropCGImage = CGImageCreateWithImageInRect(takenCGImage, cropRect);
     UIImage *its = [UIImage imageWithCGImage:cropCGImage scale:1 orientation:takenImage.imageOrientation];
-
+    
     dispatch_async(dispatch_get_global_queue(DISPATCH_QUEUE_PRIORITY_DEFAULT, 0), ^{
         [self _processCameraPhoto:its needsPreviewRotation:needsPreviewRotation previewOrientation:previewOrientation];
     });
@@ -904,7 +899,7 @@
 - (AVCaptureVideoOrientation)_currentPreviewVideoOrientationForDevice
 {
     UIDeviceOrientation deviceOrientation = [self _currentPreviewDeviceOrientation];
-
+    
     return [self.class _videoOrientationForDeviceOrientation:deviceOrientation];
 }
 
@@ -938,13 +933,13 @@
     switch ([UIApplication sharedApplication].statusBarOrientation) {
         case UIInterfaceOrientationLandscapeLeft:
             return AVCaptureVideoOrientationLandscapeLeft;
-
+            
         case UIInterfaceOrientationLandscapeRight:
             return AVCaptureVideoOrientationLandscapeRight;
             
         case UIInterfaceOrientationPortrait:
             return AVCaptureVideoOrientationPortrait;
-
+            
         case UIInterfaceOrientationPortraitUpsideDown:
             return AVCaptureVideoOrientationPortraitUpsideDown;
             
@@ -978,61 +973,61 @@
 #if CAPTURE_STILL_IMAGE
     for (AVCaptureConnection *connection in [_stillImageOutput connections]) {
 #else
-    for (AVCaptureConnection *connection in [_videoDataOutput connections]) {
+        for (AVCaptureConnection *connection in [_videoDataOutput connections]) {
 #endif
-        for (AVCaptureInputPort *port in [connection inputPorts]) {
-            if ([[port mediaType] isEqual:AVMediaTypeVideo]) {
-                videoConnection = connection;
+            for (AVCaptureInputPort *port in [connection inputPorts]) {
+                if ([[port mediaType] isEqual:AVMediaTypeVideo]) {
+                    videoConnection = connection;
+                    break;
+                }
+            }
+            
+            if (videoConnection) {
                 break;
             }
         }
         
-        if (videoConnection) {
-            break;
-        }
+        return videoConnection;
     }
     
-    return videoConnection;
-}
-
-- (CGPoint)_focusPointOfInterestForTouchPoint:(CGPoint)touchPoint
-{
-    return [_previewLayer captureDevicePointOfInterestForPoint:touchPoint];
-}
-
-- (BOOL)_focusAtPointOfInterest:(CGPoint)pointOfInterest
-{
-    return [[self _currentCameraDevice] focusAtPointOfInterest:pointOfInterest];
-}
-
-- (void)_resetZoom
-{
-    [self.fastZoom resetZoom];
+    - (CGPoint)_focusPointOfInterestForTouchPoint:(CGPoint)touchPoint
+    {
+        return [_previewLayer captureDevicePointOfInterestForPoint:touchPoint];
+    }
     
-    self.fastZoom.maxScale = [[self _currentCameraDevice] videoMaxZoomFactor];
+    - (BOOL)_focusAtPointOfInterest:(CGPoint)pointOfInterest
+    {
+        return [[self _currentCameraDevice] focusAtPointOfInterest:pointOfInterest];
+    }
     
-    self.maxZoomFactor = self.fastZoom.maxScale;
-}
-
+    - (void)_resetZoom
+    {
+        [self.fastZoom resetZoom];
+        
+        self.fastZoom.maxScale = [[self _currentCameraDevice] videoMaxZoomFactor];
+        
+        self.maxZoomFactor = self.fastZoom.maxScale;
+    }
+    
 #pragma mark - FastttFocusDelegate
-
-- (BOOL)handleTapFocusAtPoint:(CGPoint)touchPoint
-{
-    if ([AVCaptureDevice isPointFocusAvailableForCameraDevice:self.cameraDevice]) {
+    
+    - (BOOL)handleTapFocusAtPoint:(CGPoint)touchPoint
+    {
+        if ([AVCaptureDevice isPointFocusAvailableForCameraDevice:self.cameraDevice]) {
+            
+            CGPoint pointOfInterest = [self _focusPointOfInterestForTouchPoint:touchPoint];
+            
+            return ([self _focusAtPointOfInterest:pointOfInterest] && self.showsFocusView);
+        }
         
-        CGPoint pointOfInterest = [self _focusPointOfInterestForTouchPoint:touchPoint];
-        
-        return ([self _focusAtPointOfInterest:pointOfInterest] && self.showsFocusView);
+        return NO;
     }
     
-    return NO;
-}
-
 #pragma mark - FastttZoomDelegate
-
-- (BOOL)handlePinchZoomWithScale:(CGFloat)zoomScale
-{
-    return ([self zoomToScale:zoomScale] && self.showsZoomView);
-}
-
-@end
+    
+    - (BOOL)handlePinchZoomWithScale:(CGFloat)zoomScale
+    {
+        return ([self zoomToScale:zoomScale] && self.showsZoomView);
+    }
+    
+    @end
