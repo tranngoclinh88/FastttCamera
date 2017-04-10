@@ -467,8 +467,6 @@
                 [_session addOutput:_stillImageOutput];
 #else
                 
-                device.activeVideoMinFrameDuration = CMTimeMake(1, 30);
-                
                 // CoreImage wants BGRA pixel format
                 NSDictionary *videoOutputSettings = @{ (id)kCVPixelBufferPixelFormatTypeKey : [NSNumber numberWithInteger:kCVPixelFormatType_32BGRA]};
                 // create and configure video data output
@@ -589,7 +587,25 @@
 }
 
 #else // Using video output
-
+    
+    AVCaptureConnection *videoConnection = [self _currentCaptureConnection];
+    
+    if (!videoConnection.isActive)
+    return;
+    
+    if ([videoConnection isVideoOrientationSupported]) {
+        AVCaptureVideoOrientation videoOrientation = [self _currentCaptureVideoOrientationForDevice];
+        if (videoConnection.videoOrientation != videoOrientation) {
+            [videoConnection setVideoOrientation:videoOrientation];
+        }
+    }
+    
+    if ([videoConnection isVideoMirroringSupported]) {
+        if (videoConnection.videoMirrored != (_cameraDevice == FastttCameraDeviceFront)) {
+            [videoConnection setVideoMirrored:(_cameraDevice == FastttCameraDeviceFront)];
+        }
+    }
+    
     if (self.shootingCount > 0) {
         return;
     }
@@ -597,7 +613,7 @@
 }
 
 - (void)captureOutput:(AVCaptureOutput *)captureOutput didOutputSampleBuffer:(CMSampleBufferRef)sampleBuffer fromConnection:(AVCaptureConnection *)connection {
-    if (self.shootingCount < 5) {
+    if (self.shootingCount < 5 && self.shootingCount > 0) {
         self.shootingCount += 1;
         return;
     }
@@ -606,23 +622,9 @@
         return;
     }
     
-    self.self.shootingCount = 0;
+    self.shootingCount = 0;
     
     BOOL needsPreviewRotation = ![self.deviceOrientation deviceOrientationMatchesInterfaceOrientation];
-    
-    AVCaptureConnection *videoConnection = [self _currentCaptureConnection];
-    
-    if (!videoConnection.isActive)
-        return;
-    
-    if ([videoConnection isVideoOrientationSupported]) {
-        AVCaptureVideoOrientation videoOrientation = [self _currentCaptureVideoOrientationForDevice];
-        [videoConnection setVideoOrientation:videoOrientation];
-    }
-    
-    if ([videoConnection isVideoMirroringSupported]) {
-        [videoConnection setVideoMirrored:(_cameraDevice == FastttCameraDeviceFront)];
-    }
     
 #if TARGET_IPHONE_SIMULATOR
     [self _insertPreviewLayer];
