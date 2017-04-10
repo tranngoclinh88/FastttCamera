@@ -29,8 +29,7 @@
 @property (nonatomic, strong) AVCaptureStillImageOutput *stillImageOutput;
 #else
 @property (nonatomic, strong) AVCaptureVideoDataOutput *videoDataOutput;
-@property dispatch_queue_t captureSessionQueue;
-@property (nonatomic, assign) BOOL isShooting;
+@property (nonatomic, assign) NSInteger shootingCount;
 #endif
 @property (nonatomic, assign) BOOL deviceAuthorized;
 @property (nonatomic, assign) BOOL isCapturingImage;
@@ -468,16 +467,19 @@
                 [_session addOutput:_stillImageOutput];
 #else
                 
+                device.activeVideoMinFrameDuration = CMTimeMake(1, 30);
+                
                 // CoreImage wants BGRA pixel format
                 NSDictionary *videoOutputSettings = @{ (id)kCVPixelBufferPixelFormatTypeKey : [NSNumber numberWithInteger:kCVPixelFormatType_32BGRA]};
                 // create and configure video data output
                 _videoDataOutput = [[AVCaptureVideoDataOutput alloc] init];
                 _videoDataOutput.videoSettings = videoOutputSettings;
-                _videoDataOutput.alwaysDiscardsLateVideoFrames = YES;
                 
                 // create the dispatch queue for handling capture session delegate method calls
-                _captureSessionQueue = dispatch_queue_create("capture_session_queue", NULL);
+                dispatch_queue_t _captureSessionQueue = dispatch_queue_create("capture_session_queue", NULL);
                 [_videoDataOutput setSampleBufferDelegate:self queue:_captureSessionQueue];
+                _videoDataOutput.alwaysDiscardsLateVideoFrames = YES;
+
                 [_session addOutput:_videoDataOutput];
 #endif
                 
@@ -534,7 +536,7 @@
     }
     self.isCapturingImage = YES;
     
-#if CAPTURE_STILL_IMAGE
+#if CAPTURE_STILL_IMAGE // Using still image output
     
     BOOL needsPreviewRotation = ![self.deviceOrientation deviceOrientationMatchesInterfaceOrientation];
     
@@ -584,30 +586,38 @@
          });
      }];
 #endif
-    
-#else
-    if (self.isShooting) {
-        return;
-    }
-    self.isShooting = YES;
-#endif
-    
 }
 
-#if !CAPTURE_STILL_IMAGE
+#else // Using video output
 
-- (void)captureOutput:(AVCaptureOutput *)captureOutput didOutputSampleBuffer:(CMSampleBufferRef)sampleBuffer fromConnection:(AVCaptureConnection *)connection {
-    if (!self.isShooting) {
+    if (self.shootingCount > 0) {
         return;
     }
-    self.isShooting = NO;
+    self.shootingCount = 1;
+}
+
+- (void)captureOutput:(AVCaptureOutput *)captureOutput didOutputSampleBuffer:(CMSampleBufferRef)sampleBuffer fromConnection:(AVCaptureConnection *)connection {
+    if (self.shootingCount < 5) {
+        self.shootingCount += 1;
+        return;
+    }
+    
+    if (self.shootingCount < 5) {
+        return;
+    }
+    
+    self.self.shootingCount = 0;
     
     BOOL needsPreviewRotation = ![self.deviceOrientation deviceOrientationMatchesInterfaceOrientation];
     
     AVCaptureConnection *videoConnection = [self _currentCaptureConnection];
     
+    if (!videoConnection.isActive)
+        return;
+    
     if ([videoConnection isVideoOrientationSupported]) {
-        [videoConnection setVideoOrientation:[self _currentCaptureVideoOrientationForDevice]];
+        AVCaptureVideoOrientation videoOrientation = [self _currentCaptureVideoOrientationForDevice];
+        [videoConnection setVideoOrientation:videoOrientation];
     }
     
     if ([videoConnection isVideoMirroringSupported]) {
@@ -621,6 +631,7 @@
         [self _processCameraPhoto:fakeImage needsPreviewRotation:needsPreviewRotation previewOrientation:UIDeviceOrientationPortrait];
     });
 #else
+    
     UIDeviceOrientation previewOrientation = [self _currentPreviewDeviceOrientation];
     
     if (!sampleBuffer) {
@@ -633,7 +644,10 @@
 
 //    UIImage *image = [self imageFromSampleBuffer:sampleBuffer];
 //    UIImage *croppedImage = [self cropCameraImage:image toPreviewLayerBounds:self.previewLayer];
-    
+//    dispatch_async(dispatch_get_global_queue(DISPATCH_QUEUE_PRIORITY_DEFAULT, 0), ^{
+//        [self _processCameraPhoto:croppedImage needsPreviewRotation:needsPreviewRotation previewOrientation:previewOrientation];
+//    });
+
     CVPixelBufferRef pixelBuffer = (CVPixelBufferRef)CMSampleBufferGetImageBuffer(sampleBuffer);
     __block CIImage *image = [CIImage imageWithCVPixelBuffer:pixelBuffer];
     
@@ -657,7 +671,6 @@
 #endif
 }
 
-/*
 // Create a UIImage from sample buffer data
 - (UIImage *) imageFromSampleBuffer:(CMSampleBufferRef) sampleBuffer  {
     // Get a CMSampleBuffer's Core Video image buffer for the media data
@@ -738,8 +751,8 @@
     CGImageRelease(imageRef);
     
     return ret;
-} */
-#endif
+}
+#endif // Endif not still image.
 
 #pragma mark - Processing a Photo
 
@@ -828,7 +841,8 @@
     AVCaptureConnection *videoConnection = [_previewLayer connection];
     
     if ([videoConnection isVideoOrientationSupported]) {
-        [videoConnection setVideoOrientation:[self _currentPreviewVideoOrientationForDevice]];
+        AVCaptureVideoOrientation videoOrientation = [self _currentPreviewVideoOrientationForDevice];
+        [videoConnection setVideoOrientation:videoOrientation];
     }
 }
 
