@@ -16,7 +16,9 @@
 #import "FastttZoom.h"
 #import "FastttCapturedImage+Process.h"
 
-#define CAPTURE_STILL_IMAGE 1
+#define isiPhone5  ([[UIScreen mainScreen] bounds].size.height == 568)
+
+#define CAPTURE_STILL_IMAGE 0
 
 @interface FastttCamera () <FastttFocusDelegate, FastttZoomDelegate, AVCaptureVideoDataOutputSampleBufferDelegate>
 
@@ -147,7 +149,7 @@
     [super viewWillAppear:animated];
     
     [self startRunning];
-    
+
     [self _insertPreviewLayer];
     
     [self _setPreviewVideoOrientation];
@@ -158,7 +160,9 @@
 {
     [super viewDidDisappear:animated];
     
-    [self stopRunning];
+    dispatch_async(dispatch_get_main_queue(), ^{
+       [self stopRunning];
+    });
 }
 
 - (void)viewDidLayoutSubviews
@@ -354,14 +358,18 @@
 - (void)startRunning
 {
     if (![_session isRunning]) {
-        [_session startRunning];
+        dispatch_async(dispatch_get_main_queue(), ^{
+            [_session startRunning];
+        });
     }
 }
 
 - (void)stopRunning
 {
     if ([_session isRunning]) {
-        [_session stopRunning];
+        dispatch_async(dispatch_get_main_queue(), ^{
+            [_session stopRunning];
+        });
     }
 }
 
@@ -466,6 +474,13 @@
                 
                 [_session addOutput:_stillImageOutput];
 #else
+                
+                if (isiPhone5) {
+                    if ([device lockForConfiguration:nil]) {
+                        device.activeVideoMinFrameDuration = CMTimeMake(1, 15);
+                        [device unlockForConfiguration];
+                    }
+                }
                 
                 // CoreImage wants BGRA pixel format
                 NSDictionary *videoOutputSettings = @{ (id)kCVPixelBufferPixelFormatTypeKey : [NSNumber numberWithInteger:kCVPixelFormatType_32BGRA]};
