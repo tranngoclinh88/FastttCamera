@@ -503,6 +503,10 @@ mirrorsOutput = _mirrorsOutput;
                     if (!videoConnection.isActive)
                         return;
                     
+                    if (videoConnection.isVideoStabilizationSupported) {
+                        videoConnection.preferredVideoStabilizationMode = AVCaptureVideoStabilizationModeAuto;
+                    }
+                    
                     if ([videoConnection isVideoOrientationSupported]) {
                         [videoConnection setVideoOrientation:[self _currentCaptureVideoOrientationForDevice]];
                     }
